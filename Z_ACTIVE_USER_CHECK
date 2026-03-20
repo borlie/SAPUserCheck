@@ -1,0 +1,785 @@
+*&---------------------------------------------------------------------*
+*& Report Z_ACTIVE_USER_CHECK
+*& Description: Multi-Tool for Entra ID Dialog User Synchronization
+*&---------------------------------------------------------------------*
+REPORT Z_ACTIVE_USER_CHECK.
+
+*----------------------------------------------------------------------*
+* TYPE DEFINITIONS
+*----------------------------------------------------------------------*
+TYPES:
+  BEGIN OF ty_user_result,
+    mark             TYPE char1,
+    admin_proposal   TYPE string,
+    bname            TYPE usr02-bname,
+    ustyp            TYPE usr02-ustyp,
+    class            TYPE usr02-class,
+    uflag            TYPE usr02-uflag,
+    gltgv            TYPE usr02-gltgv,
+    gltgb            TYPE usr02-gltgb,
+    trdat            TYPE usr02-trdat,
+    days_since_logon TYPE i,
+    lookup_status    TYPE string,
+    az_enabled       TYPE string,
+    az_display_name  TYPE string,
+    az_mail          TYPE string,
+    az_upn           TYPE string,
+    az_job_title     TYPE string,
+    az_department    TYPE string,
+    az_last_signin   TYPE string,
+    az_given_name    TYPE string,
+    az_surname       TYPE string,
+    az_initials      TYPE string,
+    az_phone         TYPE string,
+    mgr_disp_name    TYPE string,
+    mgr_mail         TYPE string,
+    mgr_upn          TYPE string,
+  END OF ty_user_result.
+
+TYPES: tt_user_result TYPE STANDARD TABLE OF ty_user_result.
+
+" --- JSON Batch Types ---
+TYPES:
+  BEGIN OF ty_batch_request,
+    id     TYPE string,
+    method TYPE string,
+    url    TYPE string,
+  END OF ty_batch_request,
+
+  BEGIN OF ty_batch_payload,
+    requests TYPE STANDARD TABLE OF ty_batch_request WITH DEFAULT KEY,
+  END OF ty_batch_payload.
+
+TYPES:
+  BEGIN OF ty_batch_body,
+    displayName       TYPE string,
+    userPrincipalName TYPE string,
+    accountEnabled    TYPE abap_bool,
+    mail              TYPE string,
+    jobTitle          TYPE string,
+    department        TYPE string,
+    givenName         TYPE string,
+    surname           TYPE string,
+    mobilePhone       TYPE string,
+  END OF ty_batch_body,
+
+  BEGIN OF ty_batch_response,
+    id     TYPE string,
+    status TYPE i,
+    body   TYPE ty_batch_body,
+  END OF ty_batch_response,
+
+  BEGIN OF ty_batch_result,
+    responses TYPE STANDARD TABLE OF ty_batch_response WITH DEFAULT KEY,
+  END OF ty_batch_result.
+
+*----------------------------------------------------------------------*
+* CLASS lcl_alv_events DEFINITION
+*----------------------------------------------------------------------*
+CLASS lcl_alv_events DEFINITION.
+  PUBLIC SECTION.
+    METHODS:
+      on_user_command FOR EVENT added_function OF cl_salv_events_table
+        IMPORTING e_salv_function,
+      on_link_click   FOR EVENT link_click OF cl_salv_events_table
+        IMPORTING row column.
+ENDCLASS.
+
+*----------------------------------------------------------------------*
+* CONSTANTS & GLOBAL DATA
+*----------------------------------------------------------------------*
+CONSTANTS:
+  c_scope  TYPE string VALUE 'https://graph.microsoft.com/.default',
+  c_tenant TYPE string VALUE '<paste the tenant id here>'.
+
+DATA:
+  gv_token   TYPE string,
+  gt_results TYPE tt_user_result,
+  go_alv     TYPE REF TO cl_salv_table.
+
+DATA: go_events TYPE REF TO lcl_alv_events.
+
+*----------------------------------------------------------------------*
+* CLASS lcl_alv_events IMPLEMENTATION
+*----------------------------------------------------------------------*
+CLASS lcl_alv_events IMPLEMENTATION.
+  METHOD on_user_command.
+    FIELD-SYMBOLS: <fs_row> TYPE ty_user_result.
+    DATA: ls_stable TYPE lvc_s_stbl.
+
+    ls_stable-row = abap_true.
+    ls_stable-col = abap_true.
+
+    CASE e_salv_function.
+      WHEN 'PROCESS'.
+        PERFORM process_selected_users.
+
+      WHEN 'SEL_ACT'.
+        LOOP AT gt_results ASSIGNING <fs_row>.
+          IF <fs_row>-admin_proposal <> 'No Action' AND <fs_row>-admin_proposal <> 'Action Completed'.
+            <fs_row>-mark = 'X'.
+          ELSE.
+            <fs_row>-mark = ' '.
+          ENDIF.
+        ENDLOOP.
+        go_alv->refresh( s_stable = ls_stable refresh_mode = if_salv_c_refresh=>full ).
+
+      WHEN 'DSEL_ALL'.
+        LOOP AT gt_results ASSIGNING <fs_row>.
+          <fs_row>-mark = ' '.
+        ENDLOOP.
+        go_alv->refresh( s_stable = ls_stable refresh_mode = if_salv_c_refresh=>full ).
+
+      WHEN 'SET_LOCK'.
+        LOOP AT gt_results ASSIGNING <fs_row> WHERE mark = 'X'.
+          <fs_row>-admin_proposal = 'Lock User'.
+          <fs_row>-mark = ' '.
+        ENDLOOP.
+        go_alv->refresh( s_stable = ls_stable refresh_mode = if_salv_c_refresh=>full ).
+
+      WHEN 'SET_TERM'.
+        LOOP AT gt_results ASSIGNING <fs_row> WHERE mark = 'X'.
+          <fs_row>-admin_proposal = 'Terminate User'.
+          <fs_row>-mark = ' '.
+        ENDLOOP.
+        go_alv->refresh( s_stable = ls_stable refresh_mode = if_salv_c_refresh=>full ).
+
+      WHEN 'SET_UPDT'.
+        LOOP AT gt_results ASSIGNING <fs_row> WHERE mark = 'X'.
+          <fs_row>-admin_proposal = 'Update Address Data'.
+          <fs_row>-mark = ' '.
+        ENDLOOP.
+        go_alv->refresh( s_stable = ls_stable refresh_mode = if_salv_c_refresh=>full ).
+
+      WHEN 'SET_NONE'.
+        LOOP AT gt_results ASSIGNING <fs_row> WHERE mark = 'X'.
+          <fs_row>-admin_proposal = 'No Action'.
+          <fs_row>-mark = ' '.
+        ENDLOOP.
+        go_alv->refresh( s_stable = ls_stable refresh_mode = if_salv_c_refresh=>full ).
+
+    ENDCASE.
+  ENDMETHOD.
+
+  METHOD on_link_click.
+    FIELD-SYMBOLS: <fs_row> TYPE ty_user_result.
+    DATA: ls_stable TYPE lvc_s_stbl.
+    ls_stable-row = abap_true.
+    ls_stable-col = abap_true.
+
+    IF column = 'MARK'.
+      READ TABLE gt_results ASSIGNING <fs_row> INDEX row.
+      IF sy-subrc = 0.
+        IF <fs_row>-mark = 'X'.
+          <fs_row>-mark = ' '.
+        ELSE.
+          <fs_row>-mark = 'X'.
+        ENDIF.
+        go_alv->refresh( s_stable = ls_stable refresh_mode = if_salv_c_refresh=>full ).
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.
+ENDCLASS.
+
+*----------------------------------------------------------------------*
+* SELECTION SCREEN
+*----------------------------------------------------------------------*
+" --- 1. Mode Selector ---
+SELECTION-SCREEN BEGIN OF BLOCK b_mode WITH FRAME TITLE TEXT-m01.
+  PARAMETERS: p_r_cln RADIOBUTTON GROUP mod USER-COMMAND switch DEFAULT 'X', " Clean Up Tool
+              p_r_upd RADIOBUTTON GROUP mod,                                 " Data Update Tool
+              p_r_cfg RADIOBUTTON GROUP mod.                                 " API Settings
+SELECTION-SCREEN END OF BLOCK b_mode.
+
+" --- 2. Shared User Selection ---
+SELECTION-SCREEN BEGIN OF BLOCK b_user WITH FRAME TITLE TEXT-b01.
+  SELECT-OPTIONS: so_bname FOR ('USR02-BNAME') MODIF ID run.
+  SELECT-OPTIONS: so_class FOR ('USR02-CLASS') MODIF ID run.
+SELECTION-SCREEN END OF BLOCK b_user.
+
+" --- 3. Clean Up Specific Parameters ---
+SELECTION-SCREEN BEGIN OF BLOCK b_cln WITH FRAME TITLE TEXT-b04.
+  PARAMETERS:     p_locked AS CHECKBOX DEFAULT ' ' MODIF ID cln,
+                  p_nolog  AS CHECKBOX DEFAULT ' ' MODIF ID cln,
+                  p_days   TYPE i DEFAULT 100 MODIF ID cln.
+SELECTION-SCREEN END OF BLOCK b_cln.
+
+" --- 4. Update Specific Parameters ---
+SELECTION-SCREEN BEGIN OF BLOCK b_updt WITH FRAME TITLE TEXT-b05.
+  PARAMETERS:     p_upd_f  AS CHECKBOX DEFAULT 'X' MODIF ID upd, " Update First Name
+                  p_upd_l  AS CHECKBOX DEFAULT 'X' MODIF ID upd, " Update Last Name
+                  p_upd_i  AS CHECKBOX DEFAULT 'X' MODIF ID upd, " Update Initials
+                  p_upd_t  AS CHECKBOX DEFAULT 'X' MODIF ID upd, " Update Job Title
+                  p_upd_d  AS CHECKBOX DEFAULT 'X' MODIF ID upd, " Update Department
+                  p_upd_p  AS CHECKBOX DEFAULT 'X' MODIF ID upd, " Update Phone
+                  p_upd_m  AS CHECKBOX DEFAULT 'X' MODIF ID upd. " Update Email
+SELECTION-SCREEN END OF BLOCK b_updt.
+
+*" --- 5. Attribute Fetch Parameters ---
+*SELECTION-SCREEN BEGIN OF BLOCK b_attr WITH FRAME TITLE TEXT-b03.
+*  PARAMETERS:
+*    p_name   AS CHECKBOX DEFAULT 'X' MODIF ID run, " NEW: Name fields
+*    p_phone  AS CHECKBOX DEFAULT 'X' MODIF ID run, " NEW: Phone field
+*    p_mail   AS CHECKBOX DEFAULT 'X' MODIF ID run,
+*    p_title  AS CHECKBOX DEFAULT 'X' MODIF ID run,
+*    p_dept   AS CHECKBOX DEFAULT 'X' MODIF ID run,
+*    p_mgr    AS CHECKBOX DEFAULT 'X' MODIF ID run.
+*SELECTION-SCREEN END OF BLOCK b_attr.
+
+" --- 6. API Configuration Parameters ---
+SELECTION-SCREEN BEGIN OF BLOCK b_azure WITH FRAME TITLE TEXT-b02.
+  PARAMETERS:
+    p_client TYPE string LOWER CASE DEFAULT 'App registration client id' MODIF ID cfg,
+    p_secret TYPE string LOWER CASE DEFAULT '<App registration client secret>' MODIF ID pwd. " Masked later
+  PARAMETERS:
+    p_dsttok TYPE rfcdest DEFAULT 'ENTRA_GRAPH_TOKEN' MODIF ID cfg,
+    p_dstgrp TYPE rfcdest DEFAULT 'ENTRA_GRAPH_API' MODIF ID cfg.
+SELECTION-SCREEN END OF BLOCK b_azure.
+
+*----------------------------------------------------------------------*
+* SELECTION SCREEN EVENTS
+*----------------------------------------------------------------------*
+AT SELECTION-SCREEN OUTPUT.
+  LOOP AT SCREEN.
+    " Dynamic Screen Logic based on Radio Button selection
+    IF p_r_cln = 'X'.
+      IF screen-group1 = 'UPD' OR screen-group1 = 'CFG' OR screen-group1 = 'PWD'.
+        screen-active = 0.
+      ENDIF.
+    ELSEIF p_r_upd = 'X'.
+      IF screen-group1 = 'CLN' OR screen-group1 = 'CFG' OR screen-group1 = 'PWD'.
+        screen-active = 0.
+      ENDIF.
+    ELSEIF p_r_cfg = 'X'.
+      IF screen-group1 = 'RUN' OR screen-group1 = 'CLN' OR screen-group1 = 'UPD'.
+        screen-active = 0.
+      ENDIF.
+    ENDIF.
+
+    " Always hide the secret (make it a password field) when on config screen
+    IF screen-name = 'P_SECRET'.
+      screen-invisible = 1.
+    ENDIF.
+
+    MODIFY SCREEN.
+  ENDLOOP.
+
+*----------------------------------------------------------------------*
+* START-OF-SELECTION
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+
+  " Intercept execution if in Settings mode
+  IF p_r_cfg = 'X'.
+    MESSAGE 'Settings screen is for saving variants. Select a tool mode to process users.' TYPE 'S' DISPLAY LIKE 'W'.
+    RETURN.
+  ENDIF.
+
+  PERFORM fetch_sap_users.
+  PERFORM get_graph_token.
+  PERFORM enrich_graph_data.
+  PERFORM evaluate_proposals.
+  PERFORM display_alv.
+
+*----------------------------------------------------------------------*
+* FORM: FETCH_SAP_USERS
+*----------------------------------------------------------------------*
+FORM fetch_sap_users.
+
+  DATA: BEGIN OF ls_usr02,
+          bname TYPE usr02-bname,
+          ustyp TYPE usr02-ustyp,
+          class TYPE usr02-class,
+          gltgv TYPE usr02-gltgv,
+          gltgb TYPE usr02-gltgb,
+          trdat TYPE usr02-trdat,
+          uflag TYPE usr02-uflag,
+        END OF ls_usr02,
+        lt_usr02 LIKE STANDARD TABLE OF ls_usr02,
+        ls_res   TYPE ty_user_result.
+
+  SELECT bname ustyp class gltgv gltgb trdat uflag
+    FROM usr02 INTO TABLE lt_usr02
+    WHERE bname IN so_bname
+      AND class IN so_class
+      AND ustyp  = 'A'.
+
+  LOOP AT lt_usr02 INTO ls_usr02.
+    " Filter differently based on tool mode
+    IF p_r_cln = 'X'.
+      IF p_locked = ' ' AND ls_usr02-uflag <> 0.         CONTINUE. ENDIF.
+      IF p_nolog  = ' ' AND ls_usr02-trdat = '00000000'. CONTINUE. ENDIF.
+    ELSEIF p_r_upd = 'X'.
+      " Only pull active, unlocked users for data updates
+      IF ls_usr02-uflag <> 0. CONTINUE. ENDIF.
+    ENDIF.
+
+    CLEAR ls_res.
+    ls_res-bname         = ls_usr02-bname.
+    ls_res-ustyp         = ls_usr02-ustyp.
+    ls_res-class         = ls_usr02-class.
+    ls_res-uflag         = ls_usr02-uflag.
+    ls_res-gltgv         = ls_usr02-gltgv.
+    ls_res-gltgb         = ls_usr02-gltgb.
+    ls_res-trdat         = ls_usr02-trdat.
+    ls_res-lookup_status = 'Pending'.
+    APPEND ls_res TO gt_results.
+  ENDLOOP.
+
+  IF gt_results IS INITIAL.
+    MESSAGE 'No dialog users found matching selection criteria.' TYPE 'S' DISPLAY LIKE 'W'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+
+ENDFORM.
+
+*----------------------------------------------------------------------*
+* FORM: GET_GRAPH_TOKEN
+*----------------------------------------------------------------------*
+FORM get_graph_token.
+  DATA: lo_http     TYPE REF TO if_http_client,
+        lv_path     TYPE string,
+        lv_body     TYPE string,
+        lv_response TYPE string,
+        lv_status   TYPE i.
+
+  DATA: BEGIN OF ls_token_res,
+          access_token TYPE string,
+        END OF ls_token_res.
+
+  CONCATENATE '/' c_tenant '/oauth2/v2.0/token' INTO lv_path.
+
+  CONCATENATE
+    'grant_type=client_credentials'
+    '&client_id='     p_client
+    '&client_secret=' p_secret
+    '&scope='         c_scope
+    INTO lv_body.
+
+  cl_http_client=>create_by_destination(
+    EXPORTING  destination              = p_dsttok
+    IMPORTING  client                   = lo_http
+    EXCEPTIONS OTHERS                   = 1 ).
+
+  IF sy-subrc <> 0. MESSAGE |SM59 destination "{ p_dsttok }" not found. Check SM59.| TYPE 'E'. ENDIF.
+
+  lo_http->request->set_method( if_http_request=>co_request_method_post ).
+  lo_http->request->set_header_field( name = '~request_uri' value = lv_path ).
+  lo_http->request->set_header_field( name = 'Content-Type' value = 'application/x-www-form-urlencoded' ).
+  lo_http->request->set_cdata( data = lv_body ).
+
+  lo_http->send( EXCEPTIONS OTHERS = 1 ).
+  IF sy-subrc <> 0. lo_http->close( ). MESSAGE 'Token POST send failed.' TYPE 'E'. ENDIF.
+
+  lo_http->receive( EXCEPTIONS OTHERS = 1 ).
+  IF sy-subrc <> 0. lo_http->close( ). MESSAGE 'Token POST receive failed.' TYPE 'E'. ENDIF.
+
+  lo_http->response->get_status( IMPORTING code = lv_status ).
+  lv_response = lo_http->response->get_cdata( ).
+  lo_http->close( ).
+
+  IF lv_status <> 200. MESSAGE |Token request HTTP { lv_status }. Check credentials.| TYPE 'E'. ENDIF.
+
+  /ui2/cl_json=>deserialize( EXPORTING json = lv_response CHANGING data = ls_token_res ).
+  gv_token = ls_token_res-access_token.
+
+  IF gv_token IS INITIAL. MESSAGE 'access_token not found in token response.' TYPE 'E'. ENDIF.
+ENDFORM.
+
+*----------------------------------------------------------------------*
+* FORM: ENRICH_GRAPH_DATA
+*----------------------------------------------------------------------*
+FORM enrich_graph_data.
+  DATA: ls_res           TYPE ty_user_result,
+        lv_upn           TYPE string,
+        lv_select        TYPE string,
+        ls_batch_req     TYPE ty_batch_request,
+        ls_batch_payload TYPE ty_batch_payload,
+        lv_json_payload  TYPE string,
+        lv_json_response TYPE string,
+        ls_batch_result  TYPE ty_batch_result,
+        ls_batch_resp    TYPE ty_batch_response,
+        lv_total         TYPE i,
+        lv_idx           TYPE i,
+        lv_type          TYPE c LENGTH 2,
+        lv_bname         TYPE usr02-bname.
+
+  lv_total = lines( gt_results ).
+
+  lv_select = 'displayName,userPrincipalName,accountEnabled,givenName,surname,mobilePhone,mail,jobTitle,department'.
+
+  LOOP AT gt_results INTO ls_res.
+    lv_idx = sy-tabix.
+
+    DATA(lv_pct) = ( lv_idx * 100 ) / lv_total.
+    CALL FUNCTION 'SAPGUI_PROGRESS_INDICATOR'
+      EXPORTING
+        percentage = lv_pct
+        text       = |Checking Entra ID: { lv_idx } / { lv_total } ({ ls_res-bname })|.
+
+    CONCATENATE ls_res-bname '@aurobay.com' INTO lv_upn.
+    TRANSLATE lv_upn TO LOWER CASE.
+
+    CLEAR ls_batch_req.
+    CONCATENATE 'U_' ls_res-bname INTO ls_batch_req-id.
+    ls_batch_req-method = 'GET'.
+    CONCATENATE '/users/' lv_upn '?$select=' lv_select INTO ls_batch_req-url.
+    APPEND ls_batch_req TO ls_batch_payload-requests.
+
+    IF lines( ls_batch_payload-requests ) >= 18 OR lv_idx = lv_total.
+      lv_json_payload = /ui2/cl_json=>serialize(
+        data        = ls_batch_payload
+        pretty_name = /ui2/cl_json=>pretty_mode-camel_case ).
+
+      PERFORM call_graph_batch USING lv_json_payload CHANGING lv_json_response.
+
+      IF lv_json_response IS NOT INITIAL.
+        CLEAR ls_batch_result.
+        /ui2/cl_json=>deserialize(
+          EXPORTING json = lv_json_response
+          CHANGING  data = ls_batch_result ).
+
+        LOOP AT ls_batch_result-responses INTO ls_batch_resp.
+          lv_type  = ls_batch_resp-id(2).
+          lv_bname = ls_batch_resp-id+2.
+
+          READ TABLE gt_results ASSIGNING FIELD-SYMBOL(<fs_res>) WITH KEY bname = lv_bname.
+          IF sy-subrc = 0.
+            IF lv_type = 'U_'.
+              IF ls_batch_resp-status = 200.
+                <fs_res>-az_display_name = ls_batch_resp-body-displayName.
+                <fs_res>-az_upn          = ls_batch_resp-body-userPrincipalName.
+                <fs_res>-az_mail         = ls_batch_resp-body-mail.
+                <fs_res>-az_job_title    = ls_batch_resp-body-jobTitle.
+                <fs_res>-az_department   = ls_batch_resp-body-department.
+
+                " NEW: Add Names and Phone
+                <fs_res>-az_given_name   = ls_batch_resp-body-givenName.
+                <fs_res>-az_surname      = ls_batch_resp-body-surname.
+                <fs_res>-az_phone        = ls_batch_resp-body-mobilePhone.
+
+                " NEW: Auto-Calculate Initials
+                IF <fs_res>-az_given_name IS NOT INITIAL AND <fs_res>-az_surname IS NOT INITIAL.
+                  <fs_res>-az_initials = |{ <fs_res>-az_given_name(1) }{ <fs_res>-az_surname(1) }|.
+                  TRANSLATE <fs_res>-az_initials TO UPPER CASE.
+                ENDIF.
+
+                IF ls_batch_resp-body-accountEnabled = abap_true.
+                  <fs_res>-az_enabled = 'True'.
+                ELSE.
+                  <fs_res>-az_enabled = 'False'.
+                ENDIF.
+              ENDIF. " <--- FIXED: This was the missing ENDIF statement causing the nesting errors!
+            ENDIF.
+          ENDIF.
+        ENDLOOP.
+      ENDIF.
+      CLEAR ls_batch_payload-requests.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.
+
+*----------------------------------------------------------------------*
+* FORM: CALL_GRAPH_BATCH
+*----------------------------------------------------------------------*
+FORM call_graph_batch USING pv_body TYPE string CHANGING pv_response TYPE string.
+  DATA: lo_http   TYPE REF TO if_http_client,
+        lv_auth   TYPE string,
+        lv_status TYPE i.
+
+  CLEAR pv_response.
+
+  cl_http_client=>create_by_destination(
+    EXPORTING  destination = p_dstgrp
+    IMPORTING  client      = lo_http
+    EXCEPTIONS OTHERS      = 1 ).
+
+  IF sy-subrc <> 0. RETURN. ENDIF.
+
+  CONCATENATE 'Bearer' gv_token INTO lv_auth SEPARATED BY SPACE.
+
+  lo_http->request->set_method( if_http_request=>co_request_method_post ).
+  lo_http->request->set_header_field( name = '~request_uri' value = '/v1.0/$batch' ).
+  lo_http->request->set_header_field( name = 'Authorization' value = lv_auth ).
+  lo_http->request->set_header_field( name = 'Accept' value = 'application/json' ).
+  lo_http->request->set_header_field( name = 'Content-Type' value = 'application/json' ).
+  lo_http->request->set_cdata( data = pv_body ).
+
+  lo_http->send( EXCEPTIONS OTHERS = 1 ).
+  IF sy-subrc <> 0. lo_http->close( ). RETURN. ENDIF.
+
+  lo_http->receive( EXCEPTIONS OTHERS = 1 ).
+  IF sy-subrc <> 0. lo_http->close( ). RETURN. ENDIF.
+
+  lo_http->response->get_status( IMPORTING code = lv_status ).
+  IF lv_status = 200.
+    pv_response = lo_http->response->get_cdata( ).
+  ENDIF.
+
+  lo_http->close( ).
+ENDFORM.
+
+*----------------------------------------------------------------------*
+* FORM: EVALUATE_PROPOSALS
+*----------------------------------------------------------------------*
+FORM evaluate_proposals.
+  DATA: lv_date_limit TYPE sy-datum.
+  lv_date_limit = sy-datum - p_days.
+
+  LOOP AT gt_results ASSIGNING FIELD-SYMBOL(<fs_user>).
+    " Calculate inactive days
+    IF <fs_user>-trdat IS NOT INITIAL AND <fs_user>-trdat <> '00000000'.
+      <fs_user>-days_since_logon = sy-datum - <fs_user>-trdat.
+    ENDIF.
+
+    " --- LOGIC BRANCH: CLEANUP TOOL ---
+    IF p_r_cln = 'X'.
+      IF <fs_user>-class = 'TERMINATED' AND <fs_user>-uflag <> 0.
+        <fs_user>-admin_proposal = 'No Action'.
+        <fs_user>-lookup_status  = 'Already Terminated in SAP'.
+        CONTINUE.
+      ENDIF.
+
+      IF <fs_user>-az_enabled = 'False' OR <fs_user>-lookup_status = 'Not found in Azure AD'.
+        <fs_user>-admin_proposal = 'Terminate User'.
+      ELSEIF <fs_user>-trdat < lv_date_limit AND <fs_user>-trdat IS NOT INITIAL AND <fs_user>-trdat <> '00000000'.
+        <fs_user>-admin_proposal = 'Lock User'.
+      ELSE.
+        <fs_user>-admin_proposal = 'No Action'.
+      ENDIF.
+
+    " --- LOGIC BRANCH: UPDATE TOOL ---
+    ELSEIF p_r_upd = 'X'.
+      IF <fs_user>-az_enabled = 'True' OR <fs_user>-lookup_status = 'Processed'.
+        <fs_user>-admin_proposal = 'Update Address Data'.
+      ELSE.
+        <fs_user>-admin_proposal = 'No Action'.
+      ENDIF.
+    ENDIF.
+
+  ENDLOOP.
+ENDFORM.
+
+*----------------------------------------------------------------------*
+* FORM: DISPLAY_ALV
+*----------------------------------------------------------------------*
+FORM display_alv.
+  DATA: lo_cols  TYPE REF TO cl_salv_columns_table,
+        lo_funcs TYPE REF TO cl_salv_functions_list,
+        lx_msg   TYPE REF TO cx_salv_msg.
+
+  TRY.
+      cl_salv_table=>factory(
+        IMPORTING r_salv_table = go_alv
+        CHANGING  t_table      = gt_results ).
+    CATCH cx_salv_msg INTO lx_msg.
+      MESSAGE lx_msg->get_text( ) TYPE 'E'.
+      RETURN.
+  ENDTRY.
+
+  go_alv->set_screen_status(
+    pfstatus      = 'PROCESSUSER'
+    report        = sy-repid
+    set_functions = go_alv->c_functions_all ).
+
+  lo_cols = go_alv->get_columns( ).
+  lo_cols->set_optimize( abap_true ).
+
+  TRY. lo_cols->get_column( 'USTYP' )->set_visible( abap_false ). CATCH cx_salv_not_found. ENDTRY.
+  TRY. lo_cols->get_column( 'UFLAG' )->set_visible( abap_false ). CATCH cx_salv_not_found. ENDTRY.
+
+  TRY.
+      DATA(lo_class_col) = CAST cl_salv_column_table( lo_cols->get_column( 'CLASS' ) ).
+      lo_class_col->set_short_text( 'Usr Group' ).
+      lo_class_col->set_medium_text( 'User Group' ).
+      lo_class_col->set_long_text( 'Logon User Group' ).
+    CATCH cx_salv_not_found.
+  ENDTRY.
+
+  TRY.
+      DATA(lo_col) = CAST cl_salv_column_table( lo_cols->get_column( 'MARK' ) ).
+      lo_col->set_cell_type( if_salv_c_cell_type=>checkbox_hotspot ).
+      lo_col->set_short_text( 'Select' ).
+    CATCH cx_salv_not_found.
+  ENDTRY.
+
+  TRY.
+      DATA(lo_prop_col) = CAST cl_salv_column_table( lo_cols->get_column( 'ADMIN_PROPOSAL' ) ).
+      lo_prop_col->set_short_text( 'Action' ).
+      lo_prop_col->set_medium_text( 'Proposal' ).
+      lo_prop_col->set_long_text( 'Admin Proposal' ).
+    CATCH cx_salv_not_found.
+  ENDTRY.
+
+  TRY.
+      DATA(lo_days_col) = CAST cl_salv_column_table( lo_cols->get_column( 'DAYS_SINCE_LOGON' ) ).
+      lo_days_col->set_short_text( 'Days Inact' ).
+      lo_days_col->set_medium_text( 'Days Inactive' ).
+      lo_days_col->set_long_text( 'Days Since Last Logon' ).
+    CATCH cx_salv_not_found.
+  ENDTRY.
+
+  TRY.
+      DATA(lo_lookup_col) = CAST cl_salv_column_table( lo_cols->get_column( 'LOOKUP_STATUS' ) ).
+      lo_lookup_col->set_short_text( 'Status' ).
+      lo_lookup_col->set_medium_text( 'API Status' ).
+      lo_lookup_col->set_long_text( 'Graph API Lookup Status' ).
+    CATCH cx_salv_not_found.
+  ENDTRY.
+
+  TRY. DATA(lo_az_name) = CAST cl_salv_column_table( lo_cols->get_column( 'AZ_DISPLAY_NAME' ) ). lo_az_name->set_short_text( 'Entra Name' ). CATCH cx_salv_not_found. ENDTRY.
+  TRY. DATA(lo_az_upn)  = CAST cl_salv_column_table( lo_cols->get_column( 'AZ_UPN' ) ). lo_az_upn->set_short_text( 'UPN' ). CATCH cx_salv_not_found. ENDTRY.
+  TRY. DATA(lo_az_mail) = CAST cl_salv_column_table( lo_cols->get_column( 'AZ_MAIL' ) ). lo_az_mail->set_short_text( 'Email' ). CATCH cx_salv_not_found. ENDTRY.
+  TRY. DATA(lo_az_enab) = CAST cl_salv_column_table( lo_cols->get_column( 'AZ_ENABLED' ) ). lo_az_enab->set_short_text( 'Active' ). CATCH cx_salv_not_found. ENDTRY.
+  TRY. DATA(lo_az_job)  = CAST cl_salv_column_table( lo_cols->get_column( 'AZ_JOB_TITLE' ) ). lo_az_job->set_short_text( 'Job Title' ). CATCH cx_salv_not_found. ENDTRY.
+  TRY. DATA(lo_az_dept) = CAST cl_salv_column_table( lo_cols->get_column( 'AZ_DEPARTMENT' ) ). lo_az_dept->set_short_text( 'Dept.' ). CATCH cx_salv_not_found. ENDTRY.
+
+  DATA(lo_events) = go_alv->get_event( ).
+  CREATE OBJECT go_events.
+  SET HANDLER go_events->on_user_command FOR lo_events.
+  SET HANDLER go_events->on_link_click   FOR lo_events.
+
+  go_alv->display( ).
+ENDFORM.
+
+*----------------------------------------------------------------------*
+* FORM: PROCESS_SELECTED_USERS
+*----------------------------------------------------------------------*
+FORM process_selected_users.
+
+  DATA: ls_logondata  TYPE bapilogond,
+        ls_logondatax TYPE bapilogonx,
+        ls_address    TYPE bapiaddr3,
+        ls_addressx   TYPE bapiaddr3x,
+        lt_return     TYPE STANDARD TABLE OF bapiret2,
+        lt_roles      TYPE STANDARD TABLE OF bapiagr,
+        ls_stable     TYPE lvc_s_stbl.
+
+  LOOP AT gt_results ASSIGNING FIELD-SYMBOL(<fs_user>) WHERE mark = 'X'.
+    CLEAR: ls_logondata, ls_logondatax, ls_address, ls_addressx, lt_return, lt_roles.
+
+" --- LOGIC BRANCH: CLEANUP EXECUTIONS ---
+    IF <fs_user>-admin_proposal = 'Terminate User'.
+      CALL FUNCTION 'BAPI_USER_LOCK'
+        EXPORTING  username = <fs_user>-bname
+        TABLES     return   = lt_return.
+
+      " Update User Group
+      ls_logondata-class  = 'TERMINATED'.
+      ls_logondatax-class = 'X'.
+      <fs_user>-class     = 'TERMINATED'. " Update ALV visually
+
+      " Delete Valid From, Set Valid To Today
+      ls_logondata-gltgv  = '00000000'.
+      ls_logondatax-gltgv = 'X'.
+      <fs_user>-gltgv     = '00000000'.
+
+      ls_logondata-gltgb  = sy-datum.
+      ls_logondatax-gltgb = 'X'.
+      <fs_user>-gltgb     = sy-datum.
+
+      CALL FUNCTION 'BAPI_USER_CHANGE'
+        EXPORTING  username   = <fs_user>-bname
+                   logondata  = ls_logondata
+                   logondatax = ls_logondatax
+        TABLES     return     = lt_return.
+
+      CALL FUNCTION 'BAPI_USER_ACTGROUPS_ASSIGN'
+        EXPORTING  username       = <fs_user>-bname
+        TABLES     activitygroups = lt_roles
+                   return         = lt_return.
+
+      <fs_user>-lookup_status = 'Terminated via ALV'.
+      <fs_user>-admin_proposal = 'Action Completed'.
+
+    ELSEIF <fs_user>-admin_proposal = 'Lock User'.
+      CALL FUNCTION 'BAPI_USER_LOCK'
+        EXPORTING  username = <fs_user>-bname
+        TABLES     return   = lt_return.
+
+      " Update User Group
+      ls_logondata-class  = 'INACT'.
+      ls_logondatax-class = 'X'.
+      <fs_user>-class     = 'INACT'. " Update ALV visually
+
+      " Delete Valid From to prevent BAPI date validation errors
+      ls_logondata-gltgv  = '00000000'.
+      ls_logondatax-gltgv = 'X'.
+      <fs_user>-gltgv     = '00000000'.
+
+      " Set Valid To Last Logon Date
+      IF <fs_user>-trdat IS NOT INITIAL AND <fs_user>-trdat <> '00000000'.
+        ls_logondata-gltgb  = <fs_user>-trdat.
+        ls_logondatax-gltgb = 'X'.
+        <fs_user>-gltgb     = <fs_user>-trdat.
+      ENDIF.
+
+      CALL FUNCTION 'BAPI_USER_CHANGE'
+        EXPORTING  username   = <fs_user>-bname
+                   logondata  = ls_logondata
+                   logondatax = ls_logondatax
+        TABLES     return     = lt_return.
+
+      <fs_user>-lookup_status = 'Deactivated via ALV'.
+      <fs_user>-admin_proposal = 'Action Completed'.
+
+    " --- LOGIC BRANCH: UPDATE EXECUTIONS ---
+    ELSEIF <fs_user>-admin_proposal = 'Update Address Data'.
+
+      IF p_upd_t = 'X' AND <fs_user>-az_job_title IS NOT INITIAL.
+        ls_address-function  = <fs_user>-az_job_title.
+        ls_addressx-function = 'X'.
+      ENDIF.
+
+      IF p_upd_d = 'X' AND <fs_user>-az_department IS NOT INITIAL.
+        ls_address-department  = <fs_user>-az_department.
+        ls_addressx-department = 'X'.
+      ENDIF.
+
+      " --- FIXED: Direct Email Assignment ---
+      IF p_upd_m = 'X' AND <fs_user>-az_mail IS NOT INITIAL.
+        ls_address-e_mail  = <fs_user>-az_mail.
+        ls_addressx-e_mail = 'X'.
+      ENDIF.
+
+      IF p_upd_f = 'X' AND <fs_user>-az_given_name IS NOT INITIAL.
+        ls_address-firstname  = <fs_user>-az_given_name.
+        ls_addressx-firstname = 'X'.
+      ENDIF.
+
+      IF p_upd_l = 'X' AND <fs_user>-az_surname IS NOT INITIAL.
+        ls_address-lastname  = <fs_user>-az_surname.
+        ls_addressx-lastname = 'X'.
+      ENDIF.
+
+      IF p_upd_i = 'X' AND <fs_user>-az_initials IS NOT INITIAL.
+        ls_address-initials  = <fs_user>-az_initials.
+        ls_addressx-initials = 'X'.
+      ENDIF.
+
+      IF p_upd_p = 'X' AND <fs_user>-az_phone IS NOT INITIAL.
+        ls_address-tel1_numbr  = <fs_user>-az_phone.
+        ls_addressx-tel1_numbr = 'X'.
+      ENDIF.
+
+      " --- FIXED: Stripped tables from the BAPI call ---
+      CALL FUNCTION 'BAPI_USER_CHANGE'
+        EXPORTING  username   = <fs_user>-bname
+                   address    = ls_address
+                   addressx   = ls_addressx
+        TABLES     return     = lt_return.
+
+      <fs_user>-lookup_status = 'Updated via ALV'.
+      <fs_user>-admin_proposal = 'Action Completed'.
+    ENDIF.
+
+    <fs_user>-mark = ' '.
+  ENDLOOP.
+
+  CALL FUNCTION 'BAPI_TRANSACTION_COMMIT' EXPORTING wait = 'X'.
+  MESSAGE 'Selected users have been processed.' TYPE 'S'.
+
+  ls_stable-row = abap_true.
+  ls_stable-col = abap_true.
+  go_alv->refresh( s_stable = ls_stable refresh_mode = if_salv_c_refresh=>full ).
+ENDFORM.
