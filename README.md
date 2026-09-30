@@ -1,120 +1,459 @@
-Here is a complete, professionally structured `README.md` file tailored for your GitHub repository. It covers the Entra ID setup, the SAP SM59 configuration, the ABAP installation, and the SE41 GUI status requirements.
-
-You can copy and paste this directly into your repository!
-
-***
-
 # Entra ID to SAP User Synchronization Tool
 
-An ABAP utility designed to bridge the gap between Microsoft Entra ID (formerly Azure AD) and SAP SU01 User Master Records. This tool allows SAP administrators to easily identify orphaned accounts, lock/terminate inactive users, and synchronize live HR attributes (like Job Title, Department, and Email) directly from the Microsoft Graph API.
+An ABAP utility designed to bridge the gap between Microsoft Entra ID (formerly Azure AD) and SAP SU01 User Master Records.
+
+This tool allows SAP administrators to:
+
+- Identify orphaned SAP user accounts
+- Detect users disabled in Entra ID
+- Lock or terminate inactive SAP users
+- Synchronize user master data directly from Microsoft Graph
+- Perform mass updates using standard SAP BAPIs
+
+---
 
 ## Features
-* **Clean Up Tool:** Compares active SAP dialog users against their Entra ID `accountEnabled` status. Proposes locking or terminating users based on Azure status and SAP inactivity (days since last logon).
-* **Data Update Tool:** Fetches active users from Entra ID and securely synchronizes their First Name, Last Name, Initials, Phone Number, Email, Job Title, and Department directly into SAP SU01.
-* **Mass Processing:** Utilizes `BAPI_USER_CHANGE` and `BAPI_USER_LOCK` for safe, standard-compliant mass updates.
-* **Administrator Overrides:** ALV grid includes interactive buttons to override proposed actions before committing changes to the database.
+
+### Clean Up Tool
+
+Compares active SAP dialog users against their Entra ID account status.
+
+The tool can:
+
+- Detect disabled Entra ID accounts
+- Identify inactive SAP users based on last logon date
+- Propose user locking
+- Propose user termination
+- Support administrator review before execution
+
+### Data Update Tool
+
+Retrieves current user information from Microsoft Entra ID and synchronizes the following SAP user attributes:
+
+- First Name
+- Last Name
+- Initials
+- Email Address
+- Job Title
+- Department
+- Mobile Phone Number
+
+### Mass Processing
+
+Uses SAP standard APIs:
+
+- `BAPI_USER_CHANGE`
+- `BAPI_USER_LOCK`
+- `BAPI_TRANSACTION_COMMIT`
+
+No direct database updates are performed.
+
+### Administrator Overrides
+
+The ALV grid allows administrators to:
+
+- Review proposed actions
+- Select multiple users
+- Override recommendations
+- Execute approved changes in a single run
 
 ---
 
-## 📋 Prerequisites
-1. **SAP NetWeaver** (ABAP stack) with access to transactions `SE38`, `SE41`, `SM59`, and `STRUST`.
-2. **Microsoft Entra ID** tenant with administrator access to register an application.
+# 📋 Prerequisites
+
+## SAP Requirements
+
+The following SAP components and transactions must be available:
+
+- S/4HANA or SAP NetWeaver ABAP Stack
+- SE38
+- SE41
+- SM59
+- STRUST
+- SOAUTH2 or OA2C_CONFIG
+
+## Microsoft Requirements
+
+Administrative access to:
+
+- Microsoft Entra ID
+- Microsoft Graph API
+- Application Registration Management
 
 ---
 
-## ⚙️ Step 1: Microsoft Entra ID Configuration
+# ⚙️ Step 1: Microsoft Entra ID Configuration
 
-To allow SAP to read user data, you must register an application in Entra ID and grant it the appropriate Graph API permissions.
+To allow SAP to securely access Microsoft Graph, create an application registration.
 
-1. Go to the **Microsoft Entra admin center** > **App registrations** > **New registration**.
-2. Name it something like `SAP_User_Sync`.
-3. Go to **API permissions** > **Add a permission** > **Microsoft Graph** > **Application permissions**.
-4. Search for and select **`User.Read.All`**.
-5. Click **Grant admin consent for [Your Tenant]**.
-6. Go to **Certificates & secrets** > **New client secret**. Copy the **Value** immediately (you will not be able to see it again).
-7. Go to the **Overview** page and copy your **Application (client) ID** and **Directory (tenant) ID**.
+## Create Application Registration
 
----
+1. Open the Microsoft Entra Admin Center.
+2. Navigate to:
 
-## 🌐 Step 2: SAP SM59 Destinations
-
-The ABAP program relies on two standard HTTP connections to communicate with Microsoft Graph. 
-
-### 1. The Token Destination
-This endpoint is used to exchange your Client ID and Secret for an OAuth2 Bearer Token.
-* **Transaction:** `SM59`
-* **Create New:** Type `G` (HTTP Connection to External Server)
-* **Name:** `ENTRA_GRAPH_TOKEN`
-* **Host:** `login.microsoftonline.com`
-* **Port:** `443`
-* **Path Prefix:** `/`
-* **Logon & Security Tab:** Set SSL to **Active**. Set SSL Certificate to **ANONYM SSL Client** (or your default).
-
-### 2. The API Destination
-This endpoint handles the actual `$batch` JSON requests to query user data.
-* **Create New:** Type `G` 
-* **Name:** `ENTRA_GRAPH_API`
-* **Host:** `graph.microsoft.com`
-* **Port:** `443`
-* **Path Prefix:** `/`
-* **Logon & Security Tab:** Set SSL to **Active**. Set SSL Certificate to **ANONYM SSL Client**.
-
-*(Note: Ensure that the root certificates for `microsoftonline.com` and `graph.microsoft.com` are imported into your SAP system via transaction `STRUST` so the SSL handshake succeeds).*
-
----
-
-## 💻 Step 3: ABAP Installation
-
-1. Open transaction **`SE38`**.
-2. Create a new executable program named **`Z_ACTIVE_USER_CHECK`**.
-3. Paste the provided ABAP code into the editor.
-4. **Important Code Update:** Locate the `CONSTANTS` block near the top of the code and replace `c_tenant` with your actual Entra ID **Directory (tenant) ID**.
-   ```abap
-   CONSTANTS:
-     c_tenant TYPE string VALUE 'YOUR-TENANT-ID-GOES-HERE'.
+   ```text
+   App Registrations
    ```
-5. Save and Activate.
+
+3. Select:
+
+   ```text
+   New Registration
+   ```
+
+4. Create an application such as:
+
+   ```text
+   SAP_User_Sync
+   ```
+
+## Configure API Permissions
+
+Navigate to:
+
+```text
+API Permissions
+```
+
+Add:
+
+```text
+Microsoft Graph
+```
+
+Select:
+
+```text
+Application Permissions
+```
+
+Grant:
+
+```text
+User.Read.All
+```
+
+Then click:
+
+```text
+Grant Admin Consent
+```
+
+## Create Client Secret
+
+Navigate to:
+
+```text
+Certificates & Secrets
+```
+
+Create a new client secret.
+
+Record the following values:
+
+- Client ID
+- Tenant ID
+- Client Secret
+
+They will be required for SAP OAuth configuration.
 
 ---
 
-## 🎨 Step 4: Create the ALV GUI Status (SE41)
+# 🔐 Step 2: SAP OAuth Configuration (SOAUTH2)
 
-Because the ALV grid relies on custom buttons for administrator overrides, you must create a custom PF-STATUS.
+The application uses SAP's built-in OAuth framework.
 
-1. Open transaction **`SE41`**.
-2. Enter Program: **`Z_ACTIVE_USER_CHECK`** and Status: **`PROCESSUSER`**. Click Create/Change.
-3. Expand the **Application Toolbar** and add the following Function Codes:
-
-| Function Code | Icon | Icon Text | Info. Text |
-| :--- | :--- | :--- | :--- |
-| `PROCESS` | `ICON_EXECUTE_OBJECT` | Process Users | Execute BAPI Updates |
-| `SEL_ACT` | `ICON_SELECT_ALL` | Select Actionable | Select proposed rows |
-| `DSEL_ALL` | `ICON_DESELECT_ALL` | Deselect All | Clear all selections |
-| `SET_LOCK` | `ICON_LOCKED` | Set to Lock | Override: Lock User |
-| `SET_TERM` | `ICON_CANCEL` | Set to Term. | Override: Terminate |
-| `SET_UPDT` | `ICON_WRITE_FILE` | Set to Update | Override: Update Data |
-| `SET_NONE` | `ICON_TEST` | Set to None | Override: Ignore |
-| `&XXL` | `ICON_EXPORT` | Export | Export to Spreadsheet |
-
-4. Save and Activate the PF-STATUS.
+Client secrets are **never stored in ABAP code or variants**.
 
 ---
 
-## 🚀 Usage Guide
+## Create OAuth Profile
 
-1. Run the report (`Z_ACTIVE_USER_CHECK`).
-2. **First Run Configuration:** Expand the "API Configuration Parameters" block. Enter your Entra ID **Client ID** and **Client Secret**. Save this screen state as an SAP Variant so you don't have to type it every time.
-3. Select your desired tool:
-   * **Clean Up Tool:** Evaluates user lock status, Entra ID enablement, and SAP inactivity (`trdat`).
-   * **Data Update Tool:** Fetches live Entra ID attributes and prepares `SU01` address updates.
-4. Use the `Select Actionable` button to highlight proposed changes.
-5. Review the grid, make any manual overrides using the toolbar buttons, and click **Process Users**.
+Open transaction:
+
+```text
+SOAUTH2
+```
+
+or
+
+```text
+OA2C_CONFIG
+```
+
+Create a new OAuth 2.0 Client Profile.
+
+### Suggested Values
+
+| Setting | Value |
+|----------|----------|
+| Profile Name | ENTRA_GRAPH_TOKEN |
+| Grant Type | Client Credentials |
+| Client ID | Entra Application ID |
+| Client Secret | Entra Client Secret |
+| Token Endpoint | https://login.microsoftonline.com/<TENANT-ID>/oauth2/v2.0/token |
 
 ---
 
-### Disclaimer
-*This code executes `BAPI_USER_CHANGE` and modifies live user master data. Always thoroughly test in a Development/Quality Assurance SAP environment before executing in Production.*
+## Configure Scope
 
-***
+Add the scope:
 
-Would you like me to add anything else to this, such as a section on how to create the Selection Screen texts (Text Elements) in SE38?
+```text
+https://graph.microsoft.com/.default
+```
+
+---
+
+## Test OAuth Connectivity
+
+Use the OAuth administration test functionality to request a token.
+
+A successful test should return:
+
+```text
+access_token
+```
+
+without authentication errors.
+
+---
+
+## Client Secret Rotation
+
+Whenever the Entra ID client secret expires:
+
+1. Generate a new secret in Entra ID.
+2. Open SOAUTH2.
+3. Update the Client Secret.
+4. Save.
+5. Reactivate the profile.
+6. Re-test token retrieval.
+
+No ABAP code changes are required.
+
+---
+
+# 🌐 Step 3: SAP SM59 Destination Configuration
+
+The report uses a dedicated Microsoft Graph destination.
+
+---
+
+## Create HTTP Destination
+
+Transaction:
+
+```text
+SM59
+```
+
+Create a new destination:
+
+| Setting | Value |
+|----------|----------|
+| Type | G |
+| Name | ENTRA_GRAPH_API |
+| Host | graph.microsoft.com |
+| Service No. | 443 |
+| Path Prefix | / |
+
+---
+
+## Logon & Security Tab
+
+Configure:
+
+| Setting | Value |
+|----------|----------|
+| SSL | Active |
+| SSL Client Certificate | ANONYM SSL Client |
+
+---
+
+## SSL Certificates
+
+Ensure Microsoft root and intermediate certificates are trusted in SAP.
+
+Transaction:
+
+```text
+STRUST
+```
+
+Import certificates required for:
+
+- graph.microsoft.com
+- login.microsoftonline.com
+
+Test the destination successfully before proceeding.
+
+---
+
+# 💻 Step 4: ABAP Installation
+
+## Create Report
+
+Open:
+
+```text
+SE38
+```
+
+Create:
+
+```text
+Z_ACTIVE_USER_CHECK
+```
+
+Paste the supplied ABAP source code.
+
+---
+
+## Update Tenant ID
+
+Modify the tenant constant:
+
+```abap
+CONSTANTS:
+  c_tenant TYPE string VALUE 'YOUR-TENANT-ID'.
+```
+
+Replace with your own Microsoft Entra Tenant ID.
+
+---
+
+## Verify Destination Configuration
+
+The report assumes:
+
+```abap
+p_dstgrp = 'ENTRA_GRAPH_API'
+```
+
+Where:
+
+- `ENTRA_GRAPH_API` = HTTP destination in SM59
+
+---
+
+## Activate Program
+
+Activate all dependent objects.
+
+Resolve all syntax issues before transport.
+
+---
+
+# 🎨 Step 5: Create ALV GUI Status (SE41)
+
+The report requires a custom PF-STATUS.
+
+Open:
+
+```text
+SE41
+```
+
+Program:
+
+```text
+Z_ACTIVE_USER_CHECK
+```
+
+Status:
+
+```text
+PROCESSUSER
+```
+
+---
+
+## Application Toolbar Buttons
+
+Create the following function codes:
+
+| Function Code | Icon Text | Purpose |
+|----------|----------|----------|
+| PROCESS | Process Users | Execute selected actions |
+| SEL_ACT | Select Actionable | Select proposed rows |
+| DSEL_ALL | Deselect All | Clear selections |
+| SET_LOCK | Set to Lock | Force lock action |
+| SET_TERM | Set to Terminate | Force terminate action |
+| SET_UPDT | Set to Update | Force data update |
+| SET_NONE | Set to None | Ignore selected rows |
+| &XXL | Export | Export to Spreadsheet |
+
+Save and activate the status.
+
+---
+
+# 🚀 Usage Guide
+
+## Start the Report
+
+Run:
+
+```text
+Z_ACTIVE_USER_CHECK
+```
+
+---
+
+## Tool Modes
+
+### Clean Up Tool
+
+Used for lifecycle management.
+
+Checks:
+
+- Entra ID account status
+- SAP validity dates
+- SAP lock status
+- Last SAP logon date
+
+Possible recommendations:
+
+- Lock User
+- Terminate User
+- No Action
+
+---
+
+### Data Update Tool
+
+Used for user master synchronization.
+
+Updates:
+
+- First Name
+- Last Name
+- Initials
+- Phone Number
+- Email
+- Job Title
+- Department
+
+Updates are performed using standard SAP APIs.
+
+---
+
+## Processing Workflow
+
+1. Execute report.
+2. Review proposals.
+3. Select actionable users.
+4. Adjust recommendations if necessary.
+5. Press **Process Users**.
+6. Review results.
+
+---
+
+## 🔒 Security Best Practices
+
+* Never store Microsoft Entra ID client secrets inside ABAP source code.
+* Never store client secrets in SAP variants.
+* Store all OAuth credentials in SAP's OAuth 2.0 framework (`SOAUTH2` / `OA2C_CONFIG`).
+* Restrict maintenance authorizations for OAuth profiles to a small group of SAP Basis administrators.
+* Periodically rotate Microsoft Entra ID client secrets according to corporate security policies.
